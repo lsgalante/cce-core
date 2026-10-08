@@ -1,0 +1,29 @@
+[package]
+name = "cce-core"
+version = "0.1.0"
+edition = "2021"
+description = "The GUI-free half of the cce toolkit: config, input bindings, the animations switch, units, IPC and the DE's spec parsers"
+
+[lib]
+name = "cce_core"
+path = "src/lib.rs"
+
+[features]
+# What `cfg(test)` means inside this crate, for a DEPENDENT's test build: the
+# config home is a per-process directory nobody creates, natural scrolling
+# reads false and the animations switch is on unless a test forces it, so a
+# suite never reads the machine's ~/.config/cce or /run/cce. cce-ui turns it on
+# through its dev-dependency only (resolver 2 keeps dev-dependency features out
+# of normal builds), which is what keeps its suite isolated now that these
+# modules live here; a shipped binary never has it.
+test-isolation = []
+
+[dependencies]
+kdl = "4.6"
+serde_json = "1.0"
+log = "0.4"
+# `Instant` that works in the browser: std's panics on wasm32-unknown-unknown.
+web-time = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libc = "0.2"
