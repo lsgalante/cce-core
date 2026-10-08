@@ -317,19 +317,38 @@ pub fn forced_ppi() -> Option<f32> {
     })
 }
 
-/// The process-wide metric.
+static RESOLVER: OnceLock<fn() -> Option<Metric>> = OnceLock::new();
+
+/// Give a toolkit the first say in which metric is current: `resolver` answers it, or
+/// `None` to leave it to the process-wide one. cce-ui answers the metric of the window
+/// whose code is running (a window on one display, another on a second), and `None` off
+/// any window's thread — a worker reads the process-wide metric, the last a window set.
+/// Installed once; a second call is ignored.
+pub fn set_metric_resolver(resolver: fn() -> Option<Metric>) {
+    let _ = RESOLVER.set(resolver);
+}
+
+/// The current metric: the toolkit's answer ([`set_metric_resolver`]), else the
+/// process-wide one.
 pub fn metric() -> Metric {
+    if let Some(m) = RESOLVER.get().and_then(|resolve| resolve()) {
+        return m;
+    }
     *METRIC.read().unwrap()
 }
 
-/// Install the process-wide metric. A forced PPI overrides everything but
-/// keeps the caller's scale. Called by the window runner as outputs come and
-/// go; apps only read.
-pub fn set_metric(m: Metric) {
-    let m = match forced_ppi() {
+/// `m` as it is in effect: a forced PPI overrides everything but keeps `m`'s scale.
+pub fn effective(m: Metric) -> Metric {
+    match forced_ppi() {
         Some(ppi) => Metric { scale: m.scale, px_per_mm: ppi / MM_PER_INCH, source: MetricSource::Forced },
         None => m,
-    };
+    }
+}
+
+/// Install the process-wide metric ([`effective`]). Called by the window runner as
+/// outputs come and go; apps only read.
+pub fn set_metric(m: Metric) {
+    let m = effective(m);
     if let Ok(mut lock) = METRIC.write() {
         if *lock != m {
             log::info!(
