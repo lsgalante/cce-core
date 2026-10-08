@@ -2,7 +2,8 @@
 //!
 //! What a cce process needs whether or not it draws anything: the KDL config
 //! (`config`) and input bindings (`input`), the DE-wide animations switch
-//! (`motion`), lengths with units and the display metric (`units`), the
+//! (`motion`), the user's locale (`locale`), lengths with units and the display
+//! metric (`units`), the
 //! Unix-socket IPC convention (`ipc`), and the parsers for the specs the DE
 //! writes in its config — colours (`color`), ramps (`ramp`), relief
 //! (`relief_spec`) and droplets (`droplet`).
@@ -19,6 +20,7 @@ pub mod droplet;
 pub mod input;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ipc;
+pub mod locale;
 pub mod motion;
 pub mod ramp;
 pub mod relief_spec;
