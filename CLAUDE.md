@@ -16,6 +16,12 @@ foreign dirt as another session's.
 | `units` | lengths with units (`(mm)2.0`) and the display metric |
 | `ipc` | the `/tmp/<prefix>-<WAYLAND_DISPLAY>.sock` convention, `ipc::instance` (not wasm) |
 | `color`, `ramp`, `relief_spec`, `droplet` | the parsers for the specs the DE writes: hex colours, ramp curves, relief, droplets |
+| `locale` | the user's locale as a BCP 47 tag (`LC_ALL`, `LC_CTYPE`, `LANG`; the browser's `navigator.language`) |
+| `l10n` (feature) | message catalogues in Project Fluent's format: a domain's English built in, translations found as `<tag>/<domain>.ftl` under `CCE_LOCALE_DIR`, `$XDG_DATA_HOME/cce/locale`, `$XDG_DATA_DIRS/*/cce/locale` |
+
+The `l10n` feature is off by default: a process that shows no text (the
+compositor, `cce-window-manager`) does not carry fluent-bundle; cce-ui turns it
+on. Under `cfg(test)` / `test-isolation` it reads no translation directory.
 
 `cce-ui` re-exports every module at its old path (`cce_ui::config`,
 `cce_ui::motion`, `cce_ui::scene::paint::DropletSpec`, `cce_ui::layout::sample_ramp_keys`,
@@ -41,6 +47,7 @@ not get it either, which is what those builds had before the split.
 ```sh
 cargo test -p cce-core
 cargo test -p cce-core --features test-isolation
+cargo test -p cce-core --features l10n
 ```
 
 The crate builds for `wasm32-unknown-unknown` too (minus `ipc`), as cce-ui does.
