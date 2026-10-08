@@ -12,8 +12,10 @@
 //! not draw — the compositor, a sync daemon, a CLI helper — depends on it
 //! directly and links none of the toolkit's Wayland, Vulkan or text stack.
 pub mod color;
+#[cfg(feature = "config")]
 pub mod config;
 pub mod droplet;
+#[cfg(feature = "config")]
 pub mod input;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ipc;
