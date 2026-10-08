@@ -484,7 +484,7 @@ pub fn update_kdl_in_memory_typed(doc: &mut kdl::KdlDocument, key: &str, value: 
         // A bare number written over a unit-annotated slot keeps the unit:
         // typing 3 into a `(mm)` field means 3 mm, not a silent fall back
         // to logical px.
-        if crate::units::Unit::parse(ext_ty).is_some() && matches!(kdl_val, kdl::KdlValue::Base10Float(_) | kdl::KdlValue::Base10(_)) && kdl_ty.as_deref().map_or(true, |t| t == "f64" || t == "i64") {
+        if crate::units::Unit::parse(ext_ty).is_some() && matches!(kdl_val, kdl::KdlValue::Base10Float(_) | kdl::KdlValue::Base10(_)) && kdl_ty.as_deref().is_none_or(|t| t == "f64" || t == "i64") {
             kdl_ty = Some(ext_ty.clone());
         }
     }
@@ -815,7 +815,7 @@ fn perform_rolling_backup(path: &str) {
         return;
     }
     let backup_dir = config_path.parent().unwrap().join("backups");
-    if let Err(_) = fs::create_dir_all(&backup_dir) {
+    if fs::create_dir_all(&backup_dir).is_err() {
         return;
     }
     for i in (1..=4).rev() {
@@ -907,10 +907,7 @@ pub fn get_kdl_type_annotation(kdl_content: &str, key_path: &str) -> Option<Stri
 }
 
 pub fn get_kdl_type_annotations(kdl_content: &str, key_paths: &[String]) -> Vec<Option<String>> {
-    let doc = match kdl_content.parse::<kdl::KdlDocument>() {
-        Ok(d) => Some(d),
-        Err(_) => None,
-    };
+    let doc = kdl_content.parse::<kdl::KdlDocument>().ok();
     key_paths.iter().map(|key_path| {
         let doc = doc.as_ref()?;
         let parts: Vec<&str> = key_path.split('.').collect();
@@ -936,6 +933,275 @@ pub fn get_kdl_type_annotations(kdl_content: &str, key_paths: &[String]) -> Vec<
             entry.ty().map(|t| t.value().to_string())
         }
     }).collect()
+}
+
+/// `s` as a quoted KDL string, escaped as KDL v1 (the `kdl` 4 parser this
+/// reads back with) escapes: a quote, a backslash and the control
+/// characters. Every string the writer emits goes through here — until
+/// 2026-10-01 values were written as `"{s}"` with nothing escaped, so one
+/// quote inside a value made a line no parser reads, and an app whose
+/// settings file fails to parse loads its DEFAULTS.
+pub fn kdl_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn format_kdl_type(ty: &str) -> String {
+    let is_ident = !ty.is_empty()
+        && !ty.chars().next().unwrap().is_ascii_digit()
+        && ty.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '?' | '!' | '@' | '*' | '~' | '|' | '.'));
+    if is_ident {
+        ty.to_string()
+    } else {
+        kdl_quote(ty)
+    }
+}
+
+fn format_kdl_identifier(name: &str) -> String {
+    let is_ident = !name.is_empty()
+        && !name.chars().next().unwrap().is_ascii_digit()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '?' | '!' | '@' | '*' | '~' | '|' | '.'));
+    if is_ident {
+        name.to_string()
+    } else {
+        kdl_quote(name)
+    }
+}
+
+pub fn value_to_kdl(key: &str, val: &serde_json::Value, indent: usize) -> String {
+    value_to_kdl_with_annotations(key, val, indent, "", &std::collections::HashMap::new())
+}
+
+pub fn value_to_kdl_with_annotations(
+    key: &str,
+    val: &serde_json::Value,
+    indent: usize,
+    parent_path: &str,
+    annotations: &std::collections::HashMap<String, String>,
+) -> String {
+    let indent_str = "    ".repeat(indent);
+    let current_path = if parent_path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{}.{}", parent_path, key)
+    };
+
+    match val {
+        serde_json::Value::Object(map) => {
+            let has_objects = map.values().any(|v| v.is_object());
+            if has_objects {
+                let mut out = format!("{}{} {{\n", indent_str, format_kdl_identifier(key));
+                for (k, v) in map {
+                    out.push_str(&value_to_kdl_with_annotations(k, v, indent + 1, &current_path, annotations));
+                }
+                out.push_str(&format!("{}}}\n", indent_str));
+                out
+            } else {
+                let mut prop_parts = Vec::new();
+                let mut child_parts = Vec::new();
+                for (prop_name, prop_val) in map {
+                    let prop_path = format!("{}.{}", current_path, prop_name);
+                    let is_vec2i = annotations.get(&prop_path).is_some_and(|a| a == "vec2i");
+                    if is_vec2i {
+                        if let serde_json::Value::String(ref s) = prop_val {
+                            child_parts.push(format!("{}{} (vec2i){}\n", "    ".repeat(indent + 1), format_kdl_identifier(prop_name), s));
+                        }
+                    } else {
+                        let (val_str, val_ty) = match prop_val {
+                            serde_json::Value::Bool(b) => (b.to_string(), Some("bool".to_string())),
+                            serde_json::Value::Number(num) => {
+                                if prop_name == "light_source_position" {
+                                    (num.to_string(), Some("radian".to_string()))
+                                } else if num.is_f64() {
+                                    (num.to_string(), Some("f64".to_string()))
+                                } else {
+                                    (num.to_string(), Some("i64".to_string()))
+                                }
+                            }
+                            serde_json::Value::String(s) => {
+                                if let Some(len) = crate::units::Len::parse(s) {
+                                    (crate::units::fmt_num(len.value), Some(len.unit.suffix().to_string()))
+                                } else if let Some(anno) = annotations.get(&prop_path) {
+                                    if anno == "vec2i" {
+                                        (s.clone(), Some(anno.clone()))
+                                    } else {
+                                        (kdl_quote(s), Some(anno.clone()))
+                                    }
+                                } else if s.starts_with('#') {
+                                    let s_clean = s.trim_start_matches('#');
+                                    let ty = if s_clean.len() == 8 { "rgba" } else { "rgb" };
+                                    (kdl_quote(s), Some(ty.to_string()))
+                                } else if prop_name == "key" || prop_name == "keybind" || prop_name == "shortcut" || prop_name == "open_search" || prop_name == "close_search" || prop_name == "delete" || prop_name.ends_with("_key") || prop_name.ends_with(".key") || prop_name.ends_with(".keybind") || prop_name.ends_with(".open_search") || prop_name.ends_with(".close_search") || prop_name == "brightness_up" || prop_name == "brightness_down" || prop_name.ends_with(".brightness_up") || prop_name.ends_with(".brightness_down") {
+                                    (kdl_quote(s), Some("keybind".to_string()))
+                                } else {
+                                    (kdl_quote(s), None)
+                                }
+                            }
+                            _ => (prop_val.to_string(), None),
+                        };
+                        if let Some(ty) = val_ty {
+                            prop_parts.push(format!("{}=({}){}", format_kdl_identifier(prop_name), format_kdl_type(&ty), val_str));
+                        } else {
+                            prop_parts.push(format!("{}={}", format_kdl_identifier(prop_name), val_str));
+                        }
+                    }
+                }
+                if !child_parts.is_empty() {
+                    let mut out = format!("{}{} {{\n", indent_str, format_kdl_identifier(key));
+                    if !prop_parts.is_empty() {
+                        out.push_str(&format!("{}{}\n", "    ".repeat(indent + 1), prop_parts.join(" ")));
+                    }
+                    for child in child_parts {
+                        out.push_str(&child);
+                    }
+                    out.push_str(&format!("{}}}\n", indent_str));
+                    out
+                } else {
+                    format!("{}{} {}\n", indent_str, format_kdl_identifier(key), prop_parts.join(" "))
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            // An array of strings is one node with several positional args
+            // (the shape `kdl_to_json` reads `rounded_apps "a" "b"` into);
+            // any other array is one node per item (key_bindings' objects).
+            if !arr.is_empty() && arr.iter().all(|v| v.is_string()) {
+                let args: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(kdl_quote))
+                    .collect();
+                return format!("{}{} {}\n", indent_str, format_kdl_identifier(key), args.join(" "));
+            }
+            let mut out = String::new();
+            for item in arr {
+                out.push_str(&value_to_kdl_with_annotations(key, item, indent, parent_path, annotations));
+            }
+            out
+        }
+        _ => {
+            let (val_str, val_ty) = match val {
+                serde_json::Value::Bool(b) => (b.to_string(), Some("bool".to_string())),
+                serde_json::Value::Number(num) => {
+                    if key == "light_source_position" {
+                        (num.to_string(), Some("radian".to_string()))
+                    } else if num.is_f64() {
+                        (num.to_string(), Some("f64".to_string()))
+                    } else {
+                        (num.to_string(), Some("i64".to_string()))
+                    }
+                }
+                serde_json::Value::String(s) => {
+                    if let Some(len) = crate::units::Len::parse(s) {
+                        (crate::units::fmt_num(len.value), Some(len.unit.suffix().to_string()))
+                    } else if let Some(anno) = annotations.get(&current_path) {
+                        if anno == "vec2i" {
+                            (s.clone(), Some(anno.clone()))
+                        } else {
+                            (kdl_quote(s), Some(anno.clone()))
+                        }
+                    } else if s.starts_with('#') {
+                        let s_clean = s.trim_start_matches('#');
+                        let ty = if s_clean.len() == 8 { "rgba" } else { "rgb" };
+                        (kdl_quote(s), Some(ty.to_string()))
+                    } else if key == "key" || key == "keybind" || key == "shortcut" || key == "open_search" || key == "close_search" || key == "delete" || key.ends_with("_key") || key.ends_with(".key") || key.ends_with(".keybind") || key.ends_with(".open_search") || key.ends_with(".close_search") || key == "brightness_up" || key == "brightness_down" || key.ends_with(".brightness_up") || key.ends_with(".brightness_down") {
+                        (kdl_quote(s), Some("keybind".to_string()))
+                    } else {
+                        (kdl_quote(s), None)
+                    }
+                }
+                _ => (val.to_string(), None),
+            };
+            if let Some(ty) = val_ty {
+                format!("{}{} ({}){}\n", indent_str, format_kdl_identifier(key), format_kdl_type(&ty), val_str)
+            } else {
+                format!("{}{} {}\n", indent_str, format_kdl_identifier(key), val_str)
+            }
+        }
+    }
+}
+
+pub fn json_to_kdl_string(val: &serde_json::Value) -> String {
+    json_to_kdl_string_with_annotations(val, &std::collections::HashMap::new())
+}
+
+pub fn json_to_kdl_string_with_annotations(
+    val: &serde_json::Value,
+    annotations: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut out = String::new();
+    if let serde_json::Value::Object(map) = val {
+        for (sec_name, sec_val) in map {
+            if let serde_json::Value::Object(sec_map) = sec_val {
+                out.push_str(&format!("{} {{\n", format_kdl_identifier(sec_name)));
+                for (k, v) in sec_map {
+                    out.push_str(&value_to_kdl_with_annotations(k, v, 1, sec_name, annotations));
+                }
+                out.push_str("}\n");
+            } else {
+                out.push_str(&value_to_kdl_with_annotations(sec_name, sec_val, 0, "", annotations));
+            }
+        }
+    }
+    out
+}
+
+pub fn get_app_recent_files_path() -> std::path::PathBuf {
+    let app_name = get_app_name().unwrap_or_else(|| "cce-app".to_string());
+    get_config_path().parent().unwrap().join(app_name).join("recent-files.kdl")
+}
+
+pub fn load_recent_files() -> Vec<String> {
+    let path = get_app_recent_files_path();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(doc) = content.parse::<kdl::KdlDocument>() {
+                if let Some(recent_node) = doc.get("recent") {
+                    if let Some(children) = recent_node.children() {
+                        let mut files = Vec::new();
+                        for node in children.nodes() {
+                            if node.name().value() == "file" {
+                                if let Some(entry) = node.entries().first() {
+                                    if let kdl::KdlValue::String(s) = entry.value() {
+                                        files.push(s.clone());
+                                    }
+                                }
+                            }
+                        }
+                        return files;
+                    }
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub fn save_recent_files(files: &[String]) {
+    let path = get_app_recent_files_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut kdl_str = "recent {\n".to_string();
+    for file in files {
+        kdl_str.push_str(&format!("    file {}\n", kdl_quote(file)));
+    }
+    kdl_str.push_str("}\n");
+    let _ = std::fs::write(path, kdl_str);
 }
 
 
@@ -1301,273 +1567,4 @@ mod tests {
         println!("Updated KDL:\n{}", updated_kdl);
         assert!(updated_kdl.contains("position_default (vec2i)150 250"));
     }
-}
-
-/// `s` as a quoted KDL string, escaped as KDL v1 (the `kdl` 4 parser this
-/// reads back with) escapes: a quote, a backslash and the control
-/// characters. Every string the writer emits goes through here — until
-/// 2026-10-01 values were written as `"{s}"` with nothing escaped, so one
-/// quote inside a value made a line no parser reads, and an app whose
-/// settings file fails to parse loads its DEFAULTS.
-pub fn kdl_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0C}' => out.push_str("\\f"),
-            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-fn format_kdl_type(ty: &str) -> String {
-    let is_ident = !ty.is_empty()
-        && !ty.chars().next().unwrap().is_ascii_digit()
-        && ty.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '?' | '!' | '@' | '*' | '~' | '|' | '.'));
-    if is_ident {
-        ty.to_string()
-    } else {
-        kdl_quote(ty)
-    }
-}
-
-fn format_kdl_identifier(name: &str) -> String {
-    let is_ident = !name.is_empty()
-        && !name.chars().next().unwrap().is_ascii_digit()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '?' | '!' | '@' | '*' | '~' | '|' | '.'));
-    if is_ident {
-        name.to_string()
-    } else {
-        kdl_quote(name)
-    }
-}
-
-pub fn value_to_kdl(key: &str, val: &serde_json::Value, indent: usize) -> String {
-    value_to_kdl_with_annotations(key, val, indent, "", &std::collections::HashMap::new())
-}
-
-pub fn value_to_kdl_with_annotations(
-    key: &str,
-    val: &serde_json::Value,
-    indent: usize,
-    parent_path: &str,
-    annotations: &std::collections::HashMap<String, String>,
-) -> String {
-    let indent_str = "    ".repeat(indent);
-    let current_path = if parent_path.is_empty() {
-        key.to_string()
-    } else {
-        format!("{}.{}", parent_path, key)
-    };
-
-    match val {
-        serde_json::Value::Object(map) => {
-            let has_objects = map.values().any(|v| v.is_object());
-            if has_objects {
-                let mut out = format!("{}{} {{\n", indent_str, format_kdl_identifier(key));
-                for (k, v) in map {
-                    out.push_str(&value_to_kdl_with_annotations(k, v, indent + 1, &current_path, annotations));
-                }
-                out.push_str(&format!("{}}}\n", indent_str));
-                out
-            } else {
-                let mut prop_parts = Vec::new();
-                let mut child_parts = Vec::new();
-                for (prop_name, prop_val) in map {
-                    let prop_path = format!("{}.{}", current_path, prop_name);
-                    let is_vec2i = annotations.get(&prop_path).map_or(false, |a| a == "vec2i");
-                    if is_vec2i {
-                        if let serde_json::Value::String(ref s) = prop_val {
-                            child_parts.push(format!("{}{} (vec2i){}\n", "    ".repeat(indent + 1), format_kdl_identifier(prop_name), s));
-                        }
-                    } else {
-                        let (val_str, val_ty) = match prop_val {
-                            serde_json::Value::Bool(b) => (b.to_string(), Some("bool".to_string())),
-                            serde_json::Value::Number(num) => {
-                                if prop_name == "light_source_position" {
-                                    (num.to_string(), Some("radian".to_string()))
-                                } else if num.is_f64() {
-                                    (num.to_string(), Some("f64".to_string()))
-                                } else {
-                                    (num.to_string(), Some("i64".to_string()))
-                                }
-                            }
-                            serde_json::Value::String(s) => {
-                                if let Some(len) = crate::units::Len::parse(s) {
-                                    (crate::units::fmt_num(len.value), Some(len.unit.suffix().to_string()))
-                                } else if let Some(anno) = annotations.get(&prop_path) {
-                                    if anno == "vec2i" {
-                                        (s.clone(), Some(anno.clone()))
-                                    } else {
-                                        (kdl_quote(s), Some(anno.clone()))
-                                    }
-                                } else if s.starts_with('#') {
-                                    let s_clean = s.trim_start_matches('#');
-                                    let ty = if s_clean.len() == 8 { "rgba" } else { "rgb" };
-                                    (kdl_quote(s), Some(ty.to_string()))
-                                } else if prop_name == "key" || prop_name == "keybind" || prop_name == "shortcut" || prop_name == "open_search" || prop_name == "close_search" || prop_name == "delete" || prop_name.ends_with("_key") || prop_name.ends_with(".key") || prop_name.ends_with(".keybind") || prop_name.ends_with(".open_search") || prop_name.ends_with(".close_search") || prop_name == "brightness_up" || prop_name == "brightness_down" || prop_name.ends_with(".brightness_up") || prop_name.ends_with(".brightness_down") {
-                                    (kdl_quote(s), Some("keybind".to_string()))
-                                } else {
-                                    (kdl_quote(s), None)
-                                }
-                            }
-                            _ => (prop_val.to_string(), None),
-                        };
-                        if let Some(ty) = val_ty {
-                            prop_parts.push(format!("{}=({}){}", format_kdl_identifier(prop_name), format_kdl_type(&ty), val_str));
-                        } else {
-                            prop_parts.push(format!("{}={}", format_kdl_identifier(prop_name), val_str));
-                        }
-                    }
-                }
-                if !child_parts.is_empty() {
-                    let mut out = format!("{}{} {{\n", indent_str, format_kdl_identifier(key));
-                    if !prop_parts.is_empty() {
-                        out.push_str(&format!("{}{}\n", "    ".repeat(indent + 1), prop_parts.join(" ")));
-                    }
-                    for child in child_parts {
-                        out.push_str(&child);
-                    }
-                    out.push_str(&format!("{}}}\n", indent_str));
-                    out
-                } else {
-                    format!("{}{} {}\n", indent_str, format_kdl_identifier(key), prop_parts.join(" "))
-                }
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            // An array of strings is one node with several positional args
-            // (the shape `kdl_to_json` reads `rounded_apps "a" "b"` into);
-            // any other array is one node per item (key_bindings' objects).
-            if !arr.is_empty() && arr.iter().all(|v| v.is_string()) {
-                let args: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| kdl_quote(s)))
-                    .collect();
-                return format!("{}{} {}\n", indent_str, format_kdl_identifier(key), args.join(" "));
-            }
-            let mut out = String::new();
-            for item in arr {
-                out.push_str(&value_to_kdl_with_annotations(key, item, indent, parent_path, annotations));
-            }
-            out
-        }
-        _ => {
-            let (val_str, val_ty) = match val {
-                serde_json::Value::Bool(b) => (b.to_string(), Some("bool".to_string())),
-                serde_json::Value::Number(num) => {
-                    if key == "light_source_position" {
-                        (num.to_string(), Some("radian".to_string()))
-                    } else if num.is_f64() {
-                        (num.to_string(), Some("f64".to_string()))
-                    } else {
-                        (num.to_string(), Some("i64".to_string()))
-                    }
-                }
-                serde_json::Value::String(s) => {
-                    if let Some(len) = crate::units::Len::parse(s) {
-                        (crate::units::fmt_num(len.value), Some(len.unit.suffix().to_string()))
-                    } else if let Some(anno) = annotations.get(&current_path) {
-                        if anno == "vec2i" {
-                            (s.clone(), Some(anno.clone()))
-                        } else {
-                            (kdl_quote(s), Some(anno.clone()))
-                        }
-                    } else if s.starts_with('#') {
-                        let s_clean = s.trim_start_matches('#');
-                        let ty = if s_clean.len() == 8 { "rgba" } else { "rgb" };
-                        (kdl_quote(s), Some(ty.to_string()))
-                    } else if key == "key" || key == "keybind" || key == "shortcut" || key == "open_search" || key == "close_search" || key == "delete" || key.ends_with("_key") || key.ends_with(".key") || key.ends_with(".keybind") || key.ends_with(".open_search") || key.ends_with(".close_search") || key == "brightness_up" || key == "brightness_down" || key.ends_with(".brightness_up") || key.ends_with(".brightness_down") {
-                        (kdl_quote(s), Some("keybind".to_string()))
-                    } else {
-                        (kdl_quote(s), None)
-                    }
-                }
-                _ => (val.to_string(), None),
-            };
-            if let Some(ty) = val_ty {
-                format!("{}{} ({}){}\n", indent_str, format_kdl_identifier(key), format_kdl_type(&ty), val_str)
-            } else {
-                format!("{}{} {}\n", indent_str, format_kdl_identifier(key), val_str)
-            }
-        }
-    }
-}
-
-pub fn json_to_kdl_string(val: &serde_json::Value) -> String {
-    json_to_kdl_string_with_annotations(val, &std::collections::HashMap::new())
-}
-
-pub fn json_to_kdl_string_with_annotations(
-    val: &serde_json::Value,
-    annotations: &std::collections::HashMap<String, String>,
-) -> String {
-    let mut out = String::new();
-    if let serde_json::Value::Object(map) = val {
-        for (sec_name, sec_val) in map {
-            if let serde_json::Value::Object(sec_map) = sec_val {
-                out.push_str(&format!("{} {{\n", format_kdl_identifier(sec_name)));
-                for (k, v) in sec_map {
-                    out.push_str(&value_to_kdl_with_annotations(k, v, 1, sec_name, annotations));
-                }
-                out.push_str("}\n");
-            } else {
-                out.push_str(&value_to_kdl_with_annotations(sec_name, sec_val, 0, "", annotations));
-            }
-        }
-    }
-    out
-}
-
-pub fn get_app_recent_files_path() -> std::path::PathBuf {
-    let app_name = get_app_name().unwrap_or_else(|| "cce-app".to_string());
-    get_config_path().parent().unwrap().join(app_name).join("recent-files.kdl")
-}
-
-pub fn load_recent_files() -> Vec<String> {
-    let path = get_app_recent_files_path();
-    if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(doc) = content.parse::<kdl::KdlDocument>() {
-                if let Some(recent_node) = doc.get("recent") {
-                    if let Some(children) = recent_node.children() {
-                        let mut files = Vec::new();
-                        for node in children.nodes() {
-                            if node.name().value() == "file" {
-                                if let Some(entry) = node.entries().first() {
-                                    if let kdl::KdlValue::String(s) = entry.value() {
-                                        files.push(s.clone());
-                                    }
-                                }
-                            }
-                        }
-                        return files;
-                    }
-                }
-            }
-        }
-    }
-    Vec::new()
-}
-
-pub fn save_recent_files(files: &[String]) {
-    let path = get_app_recent_files_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut kdl_str = "recent {\n".to_string();
-    for file in files {
-        kdl_str.push_str(&format!("    file {}\n", kdl_quote(file)));
-    }
-    kdl_str.push_str("}\n");
-    let _ = std::fs::write(path, kdl_str);
 }

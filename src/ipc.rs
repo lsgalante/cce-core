@@ -112,7 +112,7 @@ fn focus_window_at(path: &str, query: &str) -> std::io::Result<()> {
     stream.read_to_string(&mut reply)?;
     match reply.trim() {
         "ok" => Ok(()),
-        other => Err(Error::new(ErrorKind::Other, format!("focus-window {query}: {other}"))),
+        other => Err(Error::other(format!("focus-window {query}: {other}"))),
     }
 }
 

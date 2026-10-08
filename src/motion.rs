@@ -69,7 +69,7 @@ pub fn force_for_test(value: bool) {
 pub fn enabled() -> bool {
     #[cfg(any(test, feature = "test-isolation"))]
     {
-        return FORCED.with(|f| f.get());
+        FORCED.with(|f| f.get())
     }
     #[cfg(not(any(test, feature = "test-isolation")))]
     enabled_on_this_machine()
