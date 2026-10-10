@@ -447,7 +447,10 @@ pub struct WindowInfo {
     pub h: i32,
     pub vx: f64,
     pub vy: f64,
-    /// The grid cell span, e.g. `A1:C4`.
+    /// The X11 window id of an Xwayland window; `None` for a Wayland one.
+    pub x11: Option<u32>,
+    /// The desktop square(s) the window sits on, chess style: `C-9`, or
+    /// `C-9:D-9` for a block.
     pub cell: String,
     pub minimized: bool,
     pub has_parent: bool,
@@ -473,6 +476,7 @@ impl WindowInfo {
             "h": self.h,
             "vx": self.vx,
             "vy": self.vy,
+            "x11": self.x11,
             "cell": self.cell,
             "minimized": self.minimized,
             "has_parent": self.has_parent,
@@ -505,6 +509,7 @@ impl WindowInfo {
             h: i("h") as i32,
             vx: f("vx"),
             vy: f("vy"),
+            x11: v.get("x11").and_then(|x| x.as_u64()).and_then(|x| u32::try_from(x).ok()),
             cell: s("cell"),
             minimized: b("minimized"),
             has_parent: b("has_parent"),
@@ -651,7 +656,8 @@ mod tests {
             h: 600,
             vx: 1.5,
             vy: 2.5,
-            cell: "A1:C4".into(),
+            x11: Some(0x2a00007),
+            cell: "C-9:D-9".into(),
             focused: true,
             stack: 4,
             ..Default::default()
