@@ -163,7 +163,8 @@ pub struct DesktopItem {
 }
 
 impl DesktopItem {
-    /// One `<id>:<x>:<y>:<w>:<h>` token.
+    /// One `<id>:<x>:<y>:<w>:<h>` token. Fields past the fifth are ignored,
+    /// so a field appended later does not make an older reader drop the item.
     pub fn parse(token: &str) -> Option<DesktopItem> {
         let mut f = token.split(':');
         let id = f.next()?.parse().ok()?;
@@ -171,7 +172,12 @@ impl DesktopItem {
         let y = finite(f.next()?)?;
         let w = finite(f.next()?)?;
         let h = finite(f.next()?)?;
-        f.next().is_none().then_some(DesktopItem { id, x, y, w, h })
+        Some(DesktopItem { id, x, y, w, h })
+    }
+
+    /// `(x, y, w, h)`.
+    pub fn rect(&self) -> (f64, f64, f64, f64) {
+        (self.x, self.y, self.w, self.h)
     }
 }
 
@@ -596,10 +602,12 @@ mod tests {
 
     #[test]
     fn grid_items_skip_a_bad_token_and_keep_the_rest() {
-        let Some(Request::GridItems(items)) = Request::parse("grid-items 1:0:0:10:10 junk 2:5:5:1:1:9 3:1:2:3:4") else {
+        let Some(Request::GridItems(items)) =
+            Request::parse("grid-items 1:0:0:10:10 junk 2:5:5:1:1:9 x:1:2:3:4 4:NaN:0:1:1 3:1:2:3:4")
+        else {
             panic!("not grid-items");
         };
-        assert_eq!(items.iter().map(|i| i.id).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(items.iter().map(|i| i.id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
     #[test]
