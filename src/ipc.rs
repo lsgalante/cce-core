@@ -12,8 +12,15 @@ pub mod instance;
 /// `socket_path("cce-status-interface")` → the status socket. Falls back to
 /// `/tmp/<prefix>.sock` when `$WAYLAND_DISPLAY` is unset.
 pub fn socket_path(prefix: &str) -> String {
-    match std::env::var("WAYLAND_DISPLAY") {
-        Ok(d) if !d.is_empty() => format!("/tmp/{}-{}.sock", prefix, d),
+    socket_path_for(prefix, std::env::var("WAYLAND_DISPLAY").ok().as_deref())
+}
+
+/// [`socket_path`] for a named display rather than this process's
+/// `$WAYLAND_DISPLAY` — what the compositor uses, which names its sockets
+/// after the display it created. `None` or empty gives `/tmp/<prefix>.sock`.
+pub fn socket_path_for(prefix: &str, display: Option<&str>) -> String {
+    match display {
+        Some(d) if !d.is_empty() => format!("/tmp/{}-{}.sock", prefix, d),
         _ => format!("/tmp/{}.sock", prefix),
     }
 }

@@ -42,6 +42,21 @@ pub fn stream_socket() -> String {
     super::socket_path(STREAM_PREFIX)
 }
 
+/// [`control_socket`] for a named display (the compositor's own side).
+pub fn control_socket_for(display: Option<&str>) -> String {
+    super::socket_path_for(CONTROL_PREFIX, display)
+}
+
+/// [`status_socket`] for a named display (the compositor's own side).
+pub fn status_socket_for(display: Option<&str>) -> String {
+    super::socket_path_for(STATUS_PREFIX, display)
+}
+
+/// [`stream_socket`] for a named display (the compositor's own side).
+pub fn stream_socket_for(display: Option<&str>) -> String {
+    super::socket_path_for(STREAM_PREFIX, display)
+}
+
 /// Send one line on the control socket and return the whole reply.
 ///
 /// `timeout` bounds each write and read (`None` waits as long as the
@@ -600,6 +615,14 @@ mod tests {
         assert_eq!(ShortcutEvent::parse(&ev.to_string()), Some(ev));
         assert_eq!(ShortcutEvent::parse("activated /s/1 a").map(|e| e.time_msec), Some(0));
         assert_eq!(ShortcutEvent::parse("pressed /s/1 a 1"), None);
+    }
+
+    #[test]
+    fn socket_names_for_a_display() {
+        assert_eq!(control_socket_for(Some("wayland-1")), "/tmp/cce-wayland-1.sock");
+        assert_eq!(status_socket_for(Some("wayland-1")), "/tmp/cce-status-interface-wayland-1.sock");
+        assert_eq!(stream_socket_for(Some("")), "/tmp/cce-stream.sock");
+        assert_eq!(control_socket_for(None), "/tmp/cce.sock");
     }
 
     #[test]
