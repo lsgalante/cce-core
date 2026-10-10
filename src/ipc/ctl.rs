@@ -57,6 +57,15 @@ pub fn stream_socket_for(display: Option<&str>) -> String {
     super::socket_path_for(STREAM_PREFIX, display)
 }
 
+/// The flag file `ccectl restart-compositor` leaves for cce-display-manager:
+/// the compositor writes it (owned by `user`) and exits; the display
+/// manager's daemon, finding it after the session ends and checking its
+/// owner, relaunches the session without the greeter. Both sides clear a
+/// stale one at session start.
+pub fn restart_flag(user: &str) -> String {
+    format!("/tmp/cce-restart-requested-{user}")
+}
+
 /// Send one line on the control socket and return the whole reply.
 ///
 /// `timeout` bounds each write and read (`None` waits as long as the
@@ -642,6 +651,11 @@ mod tests {
         assert_eq!(status_socket_for(Some("wayland-1")), "/tmp/cce-status-interface-wayland-1.sock");
         assert_eq!(stream_socket_for(Some("")), "/tmp/cce-stream.sock");
         assert_eq!(control_socket_for(None), "/tmp/cce.sock");
+    }
+
+    #[test]
+    fn the_restart_flag_is_per_user() {
+        assert_eq!(restart_flag("lucas"), "/tmp/cce-restart-requested-lucas");
     }
 
     #[test]
