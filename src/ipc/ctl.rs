@@ -294,6 +294,9 @@ pub enum IdleRequest {
     Inhibit { token: String, ttl_s: u64, who: String },
     /// `idle uninhibit <token>`.
     Uninhibit { token: String },
+    /// `idle inhibit-clear` — end every external lease; a fresh portal
+    /// drops whatever a predecessor held.
+    InhibitClear,
     /// `idle wake` — activity, as if the user touched the input.
     Wake,
 }
@@ -375,6 +378,7 @@ impl Request {
                 who: who.join(" "),
             }),
             ["idle", "uninhibit", token] => Request::Idle(IdleRequest::Uninhibit { token: token.to_string() }),
+            ["idle", "inhibit-clear"] => Request::Idle(IdleRequest::InhibitClear),
             ["idle", "wake"] => Request::Idle(IdleRequest::Wake),
             _ => return None,
         })
@@ -413,6 +417,7 @@ impl fmt::Display for Request {
             Request::Shortcut(ShortcutRequest::List) => f.write_str("shortcut list"),
             Request::Idle(IdleRequest::Inhibit { token, ttl_s, who }) => write!(f, "idle inhibit {token} {ttl_s} {who}"),
             Request::Idle(IdleRequest::Uninhibit { token }) => write!(f, "idle uninhibit {token}"),
+            Request::Idle(IdleRequest::InhibitClear) => f.write_str("idle inhibit-clear"),
             Request::Idle(IdleRequest::Wake) => f.write_str("idle wake"),
         }
     }
@@ -578,6 +583,7 @@ mod tests {
             who: "org.mozilla.firefox playing video".into(),
         }));
         round_trip(Request::Idle(IdleRequest::Uninhibit { token: "t1".into() }));
+        round_trip(Request::Idle(IdleRequest::InhibitClear));
         round_trip(Request::Idle(IdleRequest::Wake));
     }
 
