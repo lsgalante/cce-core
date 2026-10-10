@@ -3,6 +3,7 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
+pub mod ctl;
 pub mod instance;
 
 /// Path of a CCE IPC socket for `prefix`, keyed by `$WAYLAND_DISPLAY`.

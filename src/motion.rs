@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 /// Where the switch lives. Shared with `cce-power-apply`, the writer.
-pub const STATE_PATH: &str = "/run/cce/animations";
+pub const STATE_PATH: &str = crate::plan::ANIMATIONS_PATH;
 
 /// How stale [`enabled`] may be. A mode change is a plug or an unplug, so
 /// half a second is instant to a person, and the stat stays off the frame.

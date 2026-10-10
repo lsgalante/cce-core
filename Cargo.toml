@@ -13,7 +13,10 @@ default = ["config"]
 # `config` and `input`: the KDL config and input.kdl. Off, the crate is the
 # spec parsers, units, the animations switch and IPC alone, on log, web-time
 # and libc — what cce-window-manager takes for its camera ramp.
-config = ["dep:kdl", "dep:serde_json"]
+config = ["dep:kdl", "json"]
+# `json`: `ipc::ctl::WindowInfo`, the `windows --json` line, for a process that
+# reads the window list without the KDL config (the desktop portal, cce-remote).
+json = ["dep:serde_json"]
 # What `cfg(test)` means inside this crate, for a DEPENDENT's test build: the
 # config home is a per-process directory nobody creates, natural scrolling
 # reads false and the animations switch is on unless a test forces it, so a

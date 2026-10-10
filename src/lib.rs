@@ -17,6 +17,7 @@ pub mod color;
 #[cfg(feature = "config")]
 pub mod config;
 pub mod droplet;
+pub mod fmt;
 #[cfg(feature = "config")]
 pub mod input;
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +26,9 @@ pub mod ipc;
 pub mod l10n;
 pub mod locale;
 pub mod motion;
+pub mod plan;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod process;
 pub mod ramp;
 pub mod relief_spec;
 pub mod units;

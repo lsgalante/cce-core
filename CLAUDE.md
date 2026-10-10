@@ -15,9 +15,16 @@ foreign dirt as another session's.
 | `motion` | the DE-wide animations switch (`/run/cce/animations`) |
 | `units` | lengths with units (`(mm)2.0`) and the display metric |
 | `ipc` | the `/tmp/<prefix>-<WAYLAND_DISPLAY>.sock` convention, `ipc::instance` (not wasm) |
+| `ipc::ctl` | the compositor's control / status / stream sockets and every line other crates exchange with it: `Request`, `StatusTopic`, `SelectionEvent`, `ShortcutEvent`, `WindowInfo` (feature `json`). Builder and parser side by side, round-trip tested; the compositor parses with the code clients build with |
+| `plan` | the power plan's `/run/cce` files (animations, idle overrides), spelled once |
+| `process` | `spawn_detached` (reaped on a thread), `de_bin` (a cce binary beside this one, else PATH) (not wasm) |
+| `fmt` | byte-safe `percent_decode` |
 | `color`, `ramp`, `relief_spec`, `droplet` | the parsers for the specs the DE writes: hex colours, ramp curves, relief, droplets |
 | `locale` | the user's locale as a BCP 47 tag (`LC_ALL`, `LC_CTYPE`, `LANG`; the browser's `navigator.language`) |
 | `l10n` (feature) | message catalogues in Project Fluent's format: a domain's English built in, translations found as `<tag>/<domain>.ftl` under `CCE_LOCALE_DIR`, `$XDG_DATA_HOME/cce/locale`, `$XDG_DATA_DIRS/*/cce/locale` |
+
+The `json` feature (on with `config`) carries `serde_json` for `ipc::ctl::WindowInfo`; a
+daemon that reads the window list but no config takes it alone.
 
 The `l10n` feature is off by default: a process that shows no text (the
 compositor, `cce-window-manager`) does not carry fluent-bundle; cce-ui turns it
