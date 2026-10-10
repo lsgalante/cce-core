@@ -19,6 +19,7 @@ foreign dirt as another session's.
 | `plan` | the power plan's `/run/cce` files (animations, idle overrides), spelled once |
 | `process` | `spawn_detached` (reaped on a thread), `de_bin` (a cce binary beside this one, else PATH) (not wasm) |
 | `fmt` | byte-safe `percent_decode` |
+| `desktop_entry` | `.desktop` files: the XDG `applications` dirs, `find(id)`, the `[Desktop Entry]` group (`DesktopEntry`), `strip_field_codes` (not wasm) |
 | `color`, `ramp`, `relief_spec`, `droplet` | the parsers for the specs the DE writes: hex colours, ramp curves, relief, droplets |
 | `locale` | the user's locale as a BCP 47 tag (`LC_ALL`, `LC_CTYPE`, `LANG`; the browser's `navigator.language`) |
 | `l10n` (feature) | message catalogues in Project Fluent's format: a domain's English built in, translations found as `<tag>/<domain>.ftl` under `CCE_LOCALE_DIR`, `$XDG_DATA_HOME/cce/locale`, `$XDG_DATA_DIRS/*/cce/locale` |
