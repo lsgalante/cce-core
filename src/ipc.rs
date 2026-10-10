@@ -60,12 +60,12 @@ pub fn request_close_fade() -> std::time::Duration {
     // forever. A second is far longer than an IPC round trip and short
     // enough that a user who hit Close still sees the window go.
     const REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
-    let Ok(mut stream) = UnixStream::connect(socket_path("cce")) else {
+    let Ok(mut stream) = UnixStream::connect(ctl::control_socket()) else {
         return std::time::Duration::ZERO;
     };
     let _ = stream.set_write_timeout(Some(REPLY_TIMEOUT));
     let _ = stream.set_read_timeout(Some(REPLY_TIMEOUT));
-    if stream.write_all(b"fade-out\n").is_err() {
+    if stream.write_all(format!("{}\n", ctl::Request::FadeOut).as_bytes()).is_err() {
         return std::time::Duration::ZERO;
     }
     // The duration is the compositor's to decide (`surface { fade out_ms }`),
@@ -100,7 +100,7 @@ pub fn request_close_fade() -> std::time::Duration {
 /// no compositor to ask, it does not answer in time, it answers `error: …`
 /// (no such window, no seat), or `query` is empty or spans lines.
 pub fn focus_window(query: &str) -> std::io::Result<()> {
-    focus_window_at(&socket_path("cce"), query)
+    focus_window_at(&ctl::control_socket(), query)
 }
 
 fn focus_window_at(path: &str, query: &str) -> std::io::Result<()> {
@@ -115,7 +115,8 @@ fn focus_window_at(path: &str, query: &str) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(path)?;
     stream.set_write_timeout(Some(REPLY_TIMEOUT))?;
     stream.set_read_timeout(Some(REPLY_TIMEOUT))?;
-    stream.write_all(format!("focus-window {query}\n").as_bytes())?;
+    let request = ctl::Request::FocusWindow { query: query.to_string(), wait: false };
+    stream.write_all(format!("{request}\n").as_bytes())?;
     let mut reply = String::new();
     stream.read_to_string(&mut reply)?;
     match reply.trim() {
