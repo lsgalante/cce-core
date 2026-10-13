@@ -7,7 +7,8 @@
 //! metric (`units`), the
 //! Unix-socket IPC convention (`ipc`), and the parsers for the specs the DE
 //! writes in its config — colours (`color`), ramps (`ramp`), relief
-//! (`relief_spec`) and droplets (`droplet`).
+//! (`relief_spec`) and droplets (`droplet`) — and Obsidian's Markdown (`markdown`: the
+//! leaf rules always, the reading view and frontmatter properties as a feature).
 //!
 //! `cce-ui` re-exports every module here at its old path (`cce_ui::config`,
 //! `cce_ui::motion`, …), so an app never names this crate. A process that does
@@ -27,6 +28,7 @@ pub mod ipc;
 #[cfg(feature = "l10n")]
 pub mod l10n;
 pub mod locale;
+pub mod markdown;
 pub mod motion;
 pub mod plan;
 #[cfg(not(target_arch = "wasm32"))]

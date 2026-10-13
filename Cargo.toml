@@ -28,6 +28,12 @@ test-isolation = []
 # `l10n`: message catalogues in Project Fluent's format (fluent-bundle). Off by default:
 # a process that shows no text (the compositor) does not carry it; cce-ui turns it on.
 l10n = ["dep:fluent-bundle", "dep:unic-langid"]
+# `markdown`: Obsidian Markdown as a reading view (`markdown::blocks`) and the
+# frontmatter's properties (`markdown::parse_properties`), on pulldown-cmark and
+# yaml-rust2. The leaf rules beside them (tag names, link targets, embed sizes,
+# the frontmatter fences) are built without it — the DocEditor uses those.
+# cce-vault and cce-ui's `markdown` turn it on.
+markdown = ["dep:pulldown-cmark", "dep:yaml-rust2", "dep:indexmap", "json"]
 
 [dependencies]
 kdl = { version = "4.6", optional = true }
@@ -37,6 +43,9 @@ log = "0.4"
 web-time = "1"
 fluent-bundle = { version = "0.16", optional = true }
 unic-langid = { version = "0.9", optional = true }
+pulldown-cmark = { version = "0.13.4", default-features = false, optional = true }
+yaml-rust2 = { version = "0.13.0", optional = true }
+indexmap = { version = "2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libc = "0.2"

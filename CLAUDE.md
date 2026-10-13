@@ -21,11 +21,19 @@ foreign dirt as another session's.
 | `fmt` | byte-safe `percent_decode` |
 | `desktop_entry` | `.desktop` files: the XDG `applications` dirs, `find(id)`, the `[Desktop Entry]` group (`DesktopEntry`), `strip_field_codes` (not wasm) |
 | `color`, `ramp`, `relief_spec`, `droplet` | the parsers for the specs the DE writes: hex colours, ramp curves, relief, droplets |
+| `markdown` | Obsidian's Markdown, shared by cce-vault's index, cce-ui's `MarkdownView` and its `DocEditor`: the leaf rules always (`tag_name`, `split_target`, `is_url`, `embed_size`, `is_image`, `frontmatter_range`, `LineIndex`); with the `markdown` feature, the reading view (`blocks` → `Block`s of styled `Span`s) and the frontmatter's `parse_properties` |
 | `locale` | the user's locale as a BCP 47 tag (`LC_ALL`, `LC_CTYPE`, `LANG`; the browser's `navigator.language`) |
 | `l10n` (feature) | message catalogues in Project Fluent's format: a domain's English built in, translations found as `<tag>/<domain>.ftl` under `CCE_LOCALE_DIR`, `$XDG_DATA_HOME/cce/locale`, `$XDG_DATA_DIRS/*/cce/locale` |
 
 The `json` feature (on with `config`) carries `serde_json` for `ipc::ctl::WindowInfo`; a
 daemon that reads the window list but no config takes it alone.
+
+The `markdown` feature (off by default) carries pulldown-cmark, yaml-rust2 and indexmap for
+the reading view and frontmatter properties; cce-vault re-exports the module as
+`cce_vault::markdown`, and cce-ui's `markdown` feature turns it on. The leaf rules are kept
+free of dependencies so the DocEditor (which has none) and the vault's raw-byte index share
+them — the three Obsidian readers used to disagree on trailing `/` in tags, `#subpath`
+trimming and percent-decoding.
 
 The `l10n` feature is off by default: a process that shows no text (the
 compositor, `cce-window-manager`) does not carry fluent-bundle; cce-ui turns it
@@ -56,6 +64,7 @@ not get it either, which is what those builds had before the split.
 cargo test -p cce-core
 cargo test -p cce-core --features test-isolation
 cargo test -p cce-core --features l10n
+cargo test -p cce-core --features markdown
 ```
 
 The crate builds for `wasm32-unknown-unknown` too (minus `ipc`), as cce-ui does.
