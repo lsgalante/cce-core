@@ -118,10 +118,10 @@ pub fn strip_field_codes(exec: &str) -> String {
                 out.push(c);
                 continue;
             }
-            match chars.next() {
-                Some('%') => out.push('%'),
-                // A field code (current or deprecated): dropped.
-                Some(_) | None => {}
+            // `%%` is a literal `%`. Any other field code (current or
+            // deprecated), or a `%` ending the word, is dropped.
+            if chars.next() == Some('%') {
+                out.push('%');
             }
         }
         if !out.is_empty() {
