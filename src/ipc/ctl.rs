@@ -120,10 +120,13 @@ pub enum StatusTopic {
     ClickAway,
     /// Desktop-image group moves ([`SelectionEvent`]).
     Selection,
+    /// A right-click on the bare desktop, for the desktop client to open its
+    /// menu at ([`DesktopMenuRequest`]).
+    DesktopMenu,
 }
 
 impl StatusTopic {
-    pub const ALL: [StatusTopic; 8] = [
+    pub const ALL: [StatusTopic; 9] = [
         StatusTopic::Layout,
         StatusTopic::Title,
         StatusTopic::Modifiers,
@@ -132,6 +135,7 @@ impl StatusTopic {
         StatusTopic::Shortcuts,
         StatusTopic::ClickAway,
         StatusTopic::Selection,
+        StatusTopic::DesktopMenu,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -144,6 +148,7 @@ impl StatusTopic {
             StatusTopic::Shortcuts => "shortcuts",
             StatusTopic::ClickAway => "clickaway",
             StatusTopic::Selection => "selection",
+            StatusTopic::DesktopMenu => "desktop-menu",
         }
     }
 
@@ -244,6 +249,90 @@ impl fmt::Display for SelectionEvent {
     }
 }
 
+/// A line on the `desktop-menu` topic: the bare desktop was right-clicked,
+/// and the desktop client (cce-grid) is to open its menu there. The
+/// compositor sends it only while someone subscribes, and spawns the
+/// `cce-desktop-menu` script otherwise.
+///
+/// `open x=<x> y=<y> lx=<lx> ly=<ly> vx=<vx> vy=<vy>`, then for a window the
+/// menu may act on `window=<id> mode=<mode> app=<app_id>` — `app=` last,
+/// running to the end of the line. Unknown keys are skipped, so a field
+/// added later does not make an older reader drop the line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesktopMenuRequest {
+    /// The press on its output, logical px: where a menu on that output's
+    /// surface opens.
+    pub x: f64,
+    pub y: f64,
+    /// The press in layout coordinates, as `place-next-cell` takes them.
+    pub lx: f64,
+    pub ly: f64,
+    /// The press on the desk, virtual units.
+    pub vx: f64,
+    pub vy: f64,
+    /// The window that had focus when the press came — the press drops it,
+    /// so the client could not ask — when its mode can be set.
+    pub window: Option<MenuWindow>,
+}
+
+/// The focused window a [`DesktopMenuRequest`] names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuWindow {
+    /// Its `ccectl` id.
+    pub id: u64,
+    /// `floating`, `tiled` or `fullscreen`.
+    pub mode: String,
+    pub app_id: String,
+}
+
+impl DesktopMenuRequest {
+    /// `None` for any other line, or one missing a coordinate.
+    pub fn parse(line: &str) -> Option<DesktopMenuRequest> {
+        let rest = line.trim_end_matches(['\r', '\n']).strip_prefix("open ")?;
+        let (fields, app_id) = match rest.split_once(" app=") {
+            Some((fields, app)) => (fields, Some(app.to_string())),
+            None => (rest, None),
+        };
+        let (mut x, mut y, mut lx, mut ly, mut vx, mut vy) = (None, None, None, None, None, None);
+        let (mut id, mut mode) = (None, None);
+        for tok in fields.split_whitespace() {
+            let Some((key, value)) = tok.split_once('=') else { continue };
+            match key {
+                "x" => x = finite(value),
+                "y" => y = finite(value),
+                "lx" => lx = finite(value),
+                "ly" => ly = finite(value),
+                "vx" => vx = finite(value),
+                "vy" => vy = finite(value),
+                "window" => id = value.parse().ok(),
+                "mode" => mode = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        let window = match (id, mode, app_id) {
+            (Some(id), Some(mode), Some(app_id)) => Some(MenuWindow { id, mode, app_id }),
+            _ => None,
+        };
+        Some(DesktopMenuRequest { x: x?, y: y?, lx: lx?, ly: ly?, vx: vx?, vy: vy?, window })
+    }
+}
+
+impl fmt::Display for DesktopMenuRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "open x={:.2} y={:.2} lx={:.2} ly={:.2} vx={:.2} vy={:.2}",
+            self.x, self.y, self.lx, self.ly, self.vx, self.vy
+        )?;
+        if let Some(w) = &self.window {
+            // A line break in an app_id would end the line early.
+            let app: String = w.app_id.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
+            write!(f, " window={} mode={} app={}", w.id, w.mode, app)?;
+        }
+        Ok(())
+    }
+}
+
 /// A line on the `shortcuts` topic: a portal shortcut's chord went down or up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShortcutEvent {
@@ -336,6 +425,22 @@ pub enum Request {
     ScreenshotWindow { id: u64 },
     /// `lock` — lock the session.
     Lock,
+    /// `spawn <command>` — run a shell command line from the compositor,
+    /// in its environment (the session's), as a key binding's spawn does.
+    Spawn { command: String },
+    /// `set-mode <floating|tiled|fullscreen> [<window>]` — one window's mode,
+    /// by id or app_id; the focused window when none is named.
+    SetMode { mode: String, window: Option<String> },
+    /// `overview` — toggle overview.
+    Overview,
+    /// `minimize` — minimize the focused window.
+    Minimize,
+    /// `close` — close the focused window.
+    Close,
+    /// `reload` — reload the configuration.
+    Reload,
+    /// `exit` — end the session.
+    Exit,
     Shortcut(ShortcutRequest),
     Idle(IdleRequest),
 }
@@ -367,6 +472,16 @@ impl Request {
             }
             ["screenshot", "window", id] => Request::ScreenshotWindow { id: id.parse().ok()? },
             ["lock"] => Request::Lock,
+            ["spawn", command @ ..] if !command.is_empty() => Request::Spawn { command: command.join(" ") },
+            ["set-mode", mode, window @ ..] => Request::SetMode {
+                mode: mode.to_lowercase(),
+                window: (!window.is_empty()).then(|| window.join(" ")),
+            },
+            ["overview"] => Request::Overview,
+            ["minimize"] => Request::Minimize,
+            ["close"] => Request::Close,
+            ["reload"] => Request::Reload,
+            ["exit"] => Request::Exit,
             ["shortcut", "bind", session, id, trigger] => Request::Shortcut(ShortcutRequest::Bind {
                 session: session.to_string(),
                 id: id.to_string(),
@@ -415,6 +530,14 @@ impl fmt::Display for Request {
             }
             Request::ScreenshotWindow { id } => write!(f, "screenshot window {id}"),
             Request::Lock => f.write_str("lock"),
+            Request::Spawn { command } => write!(f, "spawn {command}"),
+            Request::SetMode { mode, window: None } => write!(f, "set-mode {mode}"),
+            Request::SetMode { mode, window: Some(window) } => write!(f, "set-mode {mode} {window}"),
+            Request::Overview => f.write_str("overview"),
+            Request::Minimize => f.write_str("minimize"),
+            Request::Close => f.write_str("close"),
+            Request::Reload => f.write_str("reload"),
+            Request::Exit => f.write_str("exit"),
             Request::Shortcut(ShortcutRequest::Bind { session, id, trigger }) => {
                 write!(f, "shortcut bind {session} {id} {trigger}")
             }
@@ -577,6 +700,12 @@ mod tests {
         round_trip(Request::GridItems(Vec::new()));
         round_trip(Request::ScreenshotWindow { id: 3 });
         round_trip(Request::Lock);
+        round_trip(Request::Spawn { command: "foot -e 'htop'".into() });
+        round_trip(Request::SetMode { mode: "tiled".into(), window: Some("12".into()) });
+        round_trip(Request::SetMode { mode: "floating".into(), window: None });
+        for verb in [Request::Overview, Request::Minimize, Request::Close, Request::Reload, Request::Exit] {
+            round_trip(verb);
+        }
         round_trip(Request::Shortcut(ShortcutRequest::Bind {
             session: "/org/fd/s/1".into(),
             id: "Quick%20Access".into(),
@@ -602,6 +731,9 @@ mod tests {
             "",
             "focus-window",
             "focus-window --wait",
+            "spawn",
+            "set-mode",
+            "exit force",
             "place-next cce-ramp 1",
             "place-next cce-ramp x 2",
             "place-next cce-ramp NaN 2",
@@ -643,6 +775,21 @@ mod tests {
         assert_eq!(ShortcutEvent::parse(&ev.to_string()), Some(ev));
         assert_eq!(ShortcutEvent::parse("activated /s/1 a").map(|e| e.time_msec), Some(0));
         assert_eq!(ShortcutEvent::parse("pressed /s/1 a 1"), None);
+    }
+
+    #[test]
+    fn desktop_menu_requests_round_trip() {
+        let bare = DesktopMenuRequest { x: 10.5, y: 20.0, lx: 1290.5, ly: 20.0, vx: -300.25, vy: 4.0, window: None };
+        assert_eq!(DesktopMenuRequest::parse(&format!("{bare}\n")), Some(bare.clone()));
+        let named = DesktopMenuRequest {
+            window: Some(MenuWindow { id: 7, mode: "tiled".into(), app_id: "Some App x=1".into() }),
+            ..bare.clone()
+        };
+        assert_eq!(DesktopMenuRequest::parse(&named.to_string()), Some(named));
+        // A key a newer compositor adds is skipped; a missing coordinate is not.
+        assert_eq!(DesktopMenuRequest::parse(&format!("{bare} output=eDP-1")), Some(bare));
+        assert_eq!(DesktopMenuRequest::parse("open x=1 y=2 lx=1 ly=2 vx=3"), None);
+        assert_eq!(DesktopMenuRequest::parse("drop"), None);
     }
 
     #[test]
