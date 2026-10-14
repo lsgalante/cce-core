@@ -266,8 +266,9 @@ impl fmt::Display for SelectionEvent {
 /// Two topics rather than a kind field, so a client that draws only one of
 /// the menus subscribes only to it, and the other keeps its fallback.
 ///
-/// `open x=<x> y=<y> lx=<lx> ly=<ly> vx=<vx> vy=<vy>`, then for a window the
-/// menu may act on `window=<id> mode=<mode> app=<app_id>` — `app=` last,
+/// `open x=<x> y=<y> lx=<lx> ly=<ly> vx=<vx> vy=<vy>`, then `output=<name>`
+/// when the press is on an output, then for a window the menu may act on
+/// `window=<id> mode=<mode> app=<app_id>` — `app=` last,
 /// running to the end of the line. Unknown keys are skipped, so a field
 /// added later does not make an older reader drop the line.
 #[derive(Clone, Debug, PartialEq)]
@@ -282,6 +283,9 @@ pub struct DesktopMenuRequest {
     /// The press on the desk, virtual units.
     pub vx: f64,
     pub vy: f64,
+    /// The output `x`/`y` are on, by its `wl_output` name: where the menu
+    /// opens.
+    pub output: Option<String>,
     /// On `desktop-menu`, the window that had focus when the press came —
     /// the press drops it, so the client could not ask — when its mode can
     /// be set. On `window-menu`, the window clicked (always present).
@@ -308,7 +312,7 @@ impl DesktopMenuRequest {
             None => (rest, None),
         };
         let (mut x, mut y, mut lx, mut ly, mut vx, mut vy) = (None, None, None, None, None, None);
-        let (mut id, mut mode) = (None, None);
+        let (mut id, mut mode, mut output) = (None, None, None);
         for tok in fields.split_whitespace() {
             let Some((key, value)) = tok.split_once('=') else { continue };
             match key {
@@ -320,6 +324,7 @@ impl DesktopMenuRequest {
                 "vy" => vy = finite(value),
                 "window" => id = value.parse().ok(),
                 "mode" => mode = Some(value.to_string()),
+                "output" => output = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -327,7 +332,7 @@ impl DesktopMenuRequest {
             (Some(id), Some(mode), Some(app_id)) => Some(MenuWindow { id, mode, app_id }),
             _ => None,
         };
-        Some(DesktopMenuRequest { x: x?, y: y?, lx: lx?, ly: ly?, vx: vx?, vy: vy?, window })
+        Some(DesktopMenuRequest { x: x?, y: y?, lx: lx?, ly: ly?, vx: vx?, vy: vy?, output, window })
     }
 }
 
@@ -338,6 +343,9 @@ impl fmt::Display for DesktopMenuRequest {
             "open x={:.2} y={:.2} lx={:.2} ly={:.2} vx={:.2} vy={:.2}",
             self.x, self.y, self.lx, self.ly, self.vx, self.vy
         )?;
+        if let Some(output) = &self.output {
+            write!(f, " output={output}")?;
+        }
         if let Some(w) = &self.window {
             // A line break in an app_id would end the line early.
             let app: String = w.app_id.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
@@ -569,6 +577,34 @@ impl fmt::Display for Request {
     }
 }
 
+/// The `pointer-location` reply: `x=<x> y=<y>` in layout coordinates, then,
+/// when the pointer is over an output, `output=<name> ox=<x> oy=<y>` — that
+/// output (its `wl_output` name) and the point on it. A reader of the first
+/// two skips the rest.
+pub fn pointer_location_reply(x: f64, y: f64, on: Option<(&str, f64, f64)>) -> String {
+    match on {
+        Some((name, ox, oy)) => format!("x={x} y={y} output={name} ox={ox} oy={oy}\n"),
+        None => format!("x={x} y={y}\n"),
+    }
+}
+
+/// The output part of a `pointer-location` reply (see
+/// [`pointer_location_reply`]): its name and the point on it. `None` from a
+/// compositor that does not send it, or with the pointer over no output.
+pub fn parse_pointer_output(reply: &str) -> Option<(String, f64, f64)> {
+    let (mut name, mut ox, mut oy) = (None, None, None);
+    for word in reply.split_whitespace() {
+        if let Some(v) = word.strip_prefix("output=") {
+            name = Some(v.to_string());
+        } else if let Some(v) = word.strip_prefix("ox=") {
+            ox = finite(v);
+        } else if let Some(v) = word.strip_prefix("oy=") {
+            oy = finite(v);
+        }
+    }
+    Some((name?, ox?, oy?))
+}
+
 /// The `pointer-location` reply, `x=<x> y=<y>`, as layout coordinates.
 pub fn parse_pointer_location(reply: &str) -> Option<(f64, f64)> {
     let mut x = None;
@@ -793,15 +829,17 @@ mod tests {
 
     #[test]
     fn desktop_menu_requests_round_trip() {
-        let bare = DesktopMenuRequest { x: 10.5, y: 20.0, lx: 1290.5, ly: 20.0, vx: -300.25, vy: 4.0, window: None };
+        let bare = DesktopMenuRequest { x: 10.5, y: 20.0, lx: 1290.5, ly: 20.0, vx: -300.25, vy: 4.0, output: None, window: None };
         assert_eq!(DesktopMenuRequest::parse(&format!("{bare}\n")), Some(bare.clone()));
         let named = DesktopMenuRequest {
             window: Some(MenuWindow { id: 7, mode: "tiled".into(), app_id: "Some App x=1".into() }),
             ..bare.clone()
         };
-        assert_eq!(DesktopMenuRequest::parse(&named.to_string()), Some(named));
+        assert_eq!(DesktopMenuRequest::parse(&named.to_string()), Some(named.clone()));
+        let placed = DesktopMenuRequest { output: Some("DP-2".into()), ..named };
+        assert_eq!(DesktopMenuRequest::parse(&placed.to_string()), Some(placed));
         // A key a newer compositor adds is skipped; a missing coordinate is not.
-        assert_eq!(DesktopMenuRequest::parse(&format!("{bare} output=eDP-1")), Some(bare));
+        assert_eq!(DesktopMenuRequest::parse(&format!("{bare} seat=seat0")), Some(bare));
         assert_eq!(DesktopMenuRequest::parse("open x=1 y=2 lx=1 ly=2 vx=3"), None);
         assert_eq!(DesktopMenuRequest::parse("drop"), None);
     }
@@ -820,9 +858,14 @@ mod tests {
     }
 
     #[test]
-    fn pointer_location_reply() {
+    fn pointer_location_reply_parses() {
         assert_eq!(parse_pointer_location("x=12.5 y=-3\n"), Some((12.5, -3.0)));
         assert_eq!(parse_pointer_location("error: no seat\n"), None);
+        let on = pointer_location_reply(1500.0, 20.5, Some(("HDMI-A-1", 220.0, 20.5)));
+        assert_eq!(parse_pointer_location(&on), Some((1500.0, 20.5)));
+        assert_eq!(parse_pointer_output(&on), Some(("HDMI-A-1".to_string(), 220.0, 20.5)));
+        // An older compositor's reply, or the pointer off every output.
+        assert_eq!(parse_pointer_output(&pointer_location_reply(3.0, 4.0, None)), None);
     }
 
     #[test]
