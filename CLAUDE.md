@@ -10,8 +10,8 @@ foreign dirt as another session's.
 
 | Module | What it is |
 |---|---|
-| `config` | the KDL config: paths (`~/.config/cce`, XDG), reading, writing with rolling backups, the JSON view |
-| `input` | `input.kdl`: domain-scoped bindings and pointer settings |
+| `config` (feature, default) | the KDL config: paths (`~/.config/cce`, XDG), reading, writing with rolling backups, the JSON view |
+| `input` (feature `config`) | `input.kdl`: domain-scoped bindings and pointer settings |
 | `motion` | the DE-wide animations switch (`/run/cce/animations`) |
 | `units` | lengths with units (`(mm)2.0`) and the display metric |
 | `ipc` | the `/tmp/<prefix>-<WAYLAND_DISPLAY>.sock` convention, `ipc::instance` (not wasm) |
@@ -24,6 +24,11 @@ foreign dirt as another session's.
 | `markdown` | Obsidian's Markdown, shared by cce-vault's index, cce-ui's `MarkdownView` and its `DocEditor`: the leaf rules always (`tag_name`, `split_target`, `is_url`, `embed_size`, `is_image`, `frontmatter_range`, `LineIndex`); with the `markdown` feature, the reading view (`blocks` → `Block`s of styled `Span`s) and the frontmatter's `parse_properties` |
 | `locale` | the user's locale as a BCP 47 tag (`LC_ALL`, `LC_CTYPE`, `LANG`; the browser's `navigator.language`) |
 | `l10n` (feature) | message catalogues in Project Fluent's format: a domain's English built in, translations found as `<tag>/<domain>.ftl` under `CCE_LOCALE_DIR`, `$XDG_DATA_HOME/cce/locale`, `$XDG_DATA_DIRS/*/cce/locale` |
+
+The `config` feature is the only default one. It gates the `config` and `input` modules and
+carries `kdl` (and `json`, below). A dependent that sets `default-features = false` loses
+both modules unless it names `config` again; seven do, none of them asking for it back
+(cce-window-manager, cce-vault, cce-sync, cce-remote, cce-mesh-io and the two portals).
 
 The `json` feature (on with `config`) carries `serde_json` for `ipc::ctl::WindowInfo`; a
 daemon that reads the window list but no config takes it alone.
