@@ -13,22 +13,23 @@ pub fn format_ramp_spec(keys: &[(f32, f32)], smooth: bool) -> String {
 }
 
 /// Parse a ramp spec string ([`format_ramp_spec`]) into `(keys, smooth)`.
-/// `None` for anything that doesn't yield at least two keys.
+/// `None` for anything that doesn't yield at least two keys, or that holds a
+/// number that is not finite: `"nan"` and `"inf"` parse as floats, `clamp` keeps a
+/// NaN, and the sort's comparison panicked on it — a pasted or hand-edited spec
+/// brought down whatever app read it.
 pub fn parse_ramp_spec(spec: &str) -> Option<(Vec<(f32, f32)>, bool)> {
     let (head, body) = spec.split_once(';')?;
     let smooth = head.trim() == "smooth";
+    let number = |s: &str| s.trim().parse::<f32>().ok().filter(|n| n.is_finite()).map(|n| n.clamp(0.0, 1.0));
     let mut keys = Vec::new();
     for part in body.split(',') {
         let (p, v) = part.split_once(':')?;
-        keys.push((
-            p.trim().parse::<f32>().ok()?.clamp(0.0, 1.0),
-            v.trim().parse::<f32>().ok()?.clamp(0.0, 1.0),
-        ));
+        keys.push((number(p)?, number(v)?));
     }
     if keys.len() < 2 {
         return None;
     }
-    keys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
     Some((keys, smooth))
 }
 
@@ -102,4 +103,27 @@ fn ramp_key_tangent(keys: &[(f32, f32)], i: usize) -> f32 {
     }
     let (w0, w1) = (2.0 * h1 + h0, h1 + 2.0 * h0);
     (w0 + w1) / (w0 / d0 + w1 / d1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A spec holding a number that is not finite is refused, not a panic: the sort
+    /// used to unwrap a NaN comparison.
+    #[test]
+    fn a_spec_with_a_non_finite_number_is_refused() {
+        for spec in ["linear;nan:0.5,1.0:1.0", "linear;0.0:NaN,1.0:1.0", "smooth;0.0:0.0,inf:1.0", "linear;-inf:0.0,1.0:1.0"] {
+            assert_eq!(parse_ramp_spec(spec), None, "{spec}");
+        }
+    }
+
+    /// Keys come back sorted and clamped to 0..1, and the line type is read.
+    #[test]
+    fn a_spec_parses_sorted_and_clamped() {
+        let (keys, smooth) = parse_ramp_spec("smooth;1.0:2.0,-0.5:0.25,0.5:0.5").unwrap();
+        assert!(smooth);
+        assert_eq!(keys, vec![(0.0, 0.25), (0.5, 0.5), (1.0, 1.0)]);
+        assert_eq!(parse_ramp_spec(&format_ramp_spec(&keys, false)), Some((keys, false)));
+    }
 }
