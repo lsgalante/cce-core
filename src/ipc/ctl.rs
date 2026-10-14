@@ -172,7 +172,7 @@ impl fmt::Display for StatusTopic {
     }
 }
 
-/// One desktop image cce-grid reports (`grid-items`): its id and virtual rect.
+/// One desktop image cce-desktop reports (`grid-items`): its id and virtual rect.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DesktopItem {
     pub id: u64,
@@ -256,7 +256,7 @@ impl fmt::Display for SelectionEvent {
 }
 
 /// A line on the `desktop-menu` topic: the bare desktop was right-clicked,
-/// and the desktop client (cce-grid) is to open its menu there. The
+/// and the desktop client (cce-desktop) is to open its menu there. The
 /// compositor sends it only while someone subscribes, and spawns the
 /// `cce-desktop-menu` script otherwise.
 ///
@@ -433,7 +433,7 @@ pub enum Request {
     PlaceNext { app_id: String, x: f64, y: f64, cell: bool },
     /// `windows --json` — one [`WindowInfo`] JSON object per line.
     WindowsJson,
-    /// `grid-items <item> ...` — every desktop image cce-grid holds, in draw order.
+    /// `grid-items <item> ...` — every desktop image cce-desktop holds, in draw order.
     GridItems(Vec<DesktopItem>),
     /// `screenshot window <id>` — replies `ok <png path>`.
     ScreenshotWindow { id: u64 },
