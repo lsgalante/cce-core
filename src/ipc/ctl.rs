@@ -123,10 +123,14 @@ pub enum StatusTopic {
     /// A right-click on the bare desktop, for the desktop client to open its
     /// menu at ([`DesktopMenuRequest`]).
     DesktopMenu,
+    /// A right-click on a window's handle (or on the window, in overview),
+    /// for the desktop client to open that window's menu at — the same
+    /// [`DesktopMenuRequest`], its `window` the one clicked.
+    WindowMenu,
 }
 
 impl StatusTopic {
-    pub const ALL: [StatusTopic; 9] = [
+    pub const ALL: [StatusTopic; 10] = [
         StatusTopic::Layout,
         StatusTopic::Title,
         StatusTopic::Modifiers,
@@ -136,6 +140,7 @@ impl StatusTopic {
         StatusTopic::ClickAway,
         StatusTopic::Selection,
         StatusTopic::DesktopMenu,
+        StatusTopic::WindowMenu,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -149,6 +154,7 @@ impl StatusTopic {
             StatusTopic::ClickAway => "clickaway",
             StatusTopic::Selection => "selection",
             StatusTopic::DesktopMenu => "desktop-menu",
+            StatusTopic::WindowMenu => "window-menu",
         }
     }
 
@@ -254,6 +260,12 @@ impl fmt::Display for SelectionEvent {
 /// compositor sends it only while someone subscribes, and spawns the
 /// `cce-desktop-menu` script otherwise.
 ///
+/// The `window-menu` topic carries the same line for a window's own menu (a
+/// right-click on its handle, or on it in overview), `window` naming the
+/// window clicked; with no subscriber the compositor spawns `cce-app-menu`.
+/// Two topics rather than a kind field, so a client that draws only one of
+/// the menus subscribes only to it, and the other keeps its fallback.
+///
 /// `open x=<x> y=<y> lx=<lx> ly=<ly> vx=<vx> vy=<vy>`, then for a window the
 /// menu may act on `window=<id> mode=<mode> app=<app_id>` — `app=` last,
 /// running to the end of the line. Unknown keys are skipped, so a field
@@ -270,8 +282,9 @@ pub struct DesktopMenuRequest {
     /// The press on the desk, virtual units.
     pub vx: f64,
     pub vy: f64,
-    /// The window that had focus when the press came — the press drops it,
-    /// so the client could not ask — when its mode can be set.
+    /// On `desktop-menu`, the window that had focus when the press came —
+    /// the press drops it, so the client could not ask — when its mode can
+    /// be set. On `window-menu`, the window clicked (always present).
     pub window: Option<MenuWindow>,
 }
 
@@ -280,7 +293,8 @@ pub struct DesktopMenuRequest {
 pub struct MenuWindow {
     /// Its `ccectl` id.
     pub id: u64,
-    /// `floating`, `tiled` or `fullscreen`.
+    /// Its mode, lower case: `floating`, `tiled` or `fullscreen` (on
+    /// `window-menu` also whatever else a clicked window is, `overlay` say).
     pub mode: String,
     pub app_id: String,
 }
