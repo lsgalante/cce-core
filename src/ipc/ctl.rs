@@ -652,6 +652,10 @@ pub struct WindowInfo {
     pub ssd: bool,
     pub decorated: bool,
     pub beveled: bool,
+    /// The client's process, as the compositor sees it: a Wayland client's
+    /// socket peer, an X11 client's `_NET_WM_PID` (which the client sets
+    /// itself, so trust it less). `None` when unknown.
+    pub pid: Option<u32>,
 }
 
 #[cfg(feature = "json")]
@@ -678,6 +682,7 @@ impl WindowInfo {
             "ssd": self.ssd,
             "decorated": self.decorated,
             "beveled": self.beveled,
+            "pid": self.pid,
         })
         .to_string()
     }
@@ -711,6 +716,7 @@ impl WindowInfo {
             ssd: b("ssd"),
             decorated: b("decorated"),
             beveled: b("beveled"),
+            pid: v.get("pid").and_then(|x| x.as_u64()).and_then(|x| u32::try_from(x).ok()).filter(|&p| p > 0),
         })
     }
 
@@ -892,11 +898,12 @@ mod tests {
             cell: "C-9:D-9".into(),
             focused: true,
             stack: 4,
+            pid: Some(4242),
             ..Default::default()
         };
         assert_eq!(WindowInfo::from_json_line(&w.to_json_line()), Some(w));
         let old = WindowInfo::from_json_line(r#"{"id":1,"app_id":"x"}"#).unwrap();
-        assert_eq!((old.stack, old.focused), (-1, false));
+        assert_eq!((old.stack, old.focused, old.pid), (-1, false, None));
         assert_eq!(WindowInfo::from_json_line(r#"{"app_id":"x"}"#), None);
         assert_eq!(WindowInfo::parse_all("{\"id\":1,\"app_id\":\"a\"}\nnot json\n").len(), 1);
     }
