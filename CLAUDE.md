@@ -12,7 +12,7 @@ foreign dirt as another session's.
 |---|---|
 | `config` (feature, default) | the KDL config: paths (`~/.config/cce`, XDG), reading, writing with rolling backups, the JSON view |
 | `input` (feature `config`) | `input.kdl`: domain-scoped bindings and pointer settings |
-| `motion` | the DE-wide animations switch (`/run/cce/animations`) |
+| `motion` | the DE-wide animations switch (`/run/cce/animations`) and animation speed (`style.animation_speed`) |
 | `units` | lengths with units (`(mm)2.0`) and the display metric |
 | `ipc` | the `/tmp/<prefix>-<WAYLAND_DISPLAY>.sock` convention, `ipc::instance` (not wasm) |
 | `ipc::ctl` | the compositor's control / status / stream sockets and every line other crates exchange with it: `Request`, `StatusTopic`, `SelectionEvent`, `ShortcutEvent`, `WindowInfo` (feature `json`). Builder and parser side by side, round-trip tested; the compositor parses with the code clients build with |
@@ -55,8 +55,9 @@ is the point of the split.
 
 Several functions answer differently under `cfg(test)`, so a suite never reads
 the machine. `config::config_home()` is a per-process directory nobody creates,
-`input::natural_scroll()` reads false, and `motion::enabled()` is on unless
-`motion::force_for_test` says otherwise. Since those modules live here,
+`input::natural_scroll()` reads false, `motion::enabled()` is on unless
+`motion::force_for_test` says otherwise, and `motion::speed()` is 1 unless
+`motion::force_speed_for_test` says otherwise. Since those modules live here,
 `cfg(test)` would only cover this crate's own suite. Every such gate is
 `cfg(any(test, feature = "test-isolation"))` instead, and cce-ui turns the
 feature on through its dev-dependency. Resolver 2 keeps it out of normal builds,

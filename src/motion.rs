@@ -17,6 +17,15 @@
 //! most every [`RECHECK`], so a running client follows a mode change within
 //! half a second and nothing needs restarting or reloading. `CCE_ANIMATIONS`
 //! (`0`/`off` or `1`/`on`) overrides the file for one process, for testing.
+//!
+//! Beside the switch, the DE's animation **speed** ([`speed`]): a multiplier
+//! on the rhythm of whatever animates for as long as it runs — the activity
+//! indicators, which step their cycle by `dt * speed()`. It is a preference,
+//! not a power-mode lever, so it lives in the shared config as
+//! `style { animation_speed 1.0 }` ([`SPEED_KEY`]), set from the System
+//! Interface's Appearance page, and like the switch it is re-read at most
+//! every [`RECHECK`], so a running client follows a change without a reload.
+//! Transitions (a dropdown opening, a toggle sliding) keep their own timing.
 
 use std::time::Duration;
 
@@ -99,9 +108,117 @@ fn enabled_on_this_machine() -> bool {
     }
 }
 
+/// The speed's key in the shared config, as `config::write_config_value`
+/// spells it.
+pub const SPEED_KEY: &str = "style.animation_speed";
+
+/// The slowest and fastest [`speed`]; a configured value outside is clamped.
+pub const MIN_SPEED: f32 = 0.25;
+pub const MAX_SPEED: f32 = 4.0;
+
+/// A configured speed as [`speed`] answers it: clamped to
+/// [`MIN_SPEED`]..=[`MAX_SPEED`], and normal (1) when it is not a positive
+/// finite number.
+pub fn clamp_speed(value: f64) -> f32 {
+    let v = value as f32;
+    if v.is_finite() && v > 0.0 {
+        v.clamp(MIN_SPEED, MAX_SPEED)
+    } else {
+        1.0
+    }
+}
+
+/// What the shared config says right now about the speed ([`SPEED_KEY`]),
+/// clamped; `None` when it says nothing, which means normal. Mtime-cached
+/// by the config module, not by [`RECHECK`] — for the page that sets it.
+#[cfg(feature = "config")]
+pub fn read_speed() -> Option<f32> {
+    crate::config::cached_shared_config_arc().pointer("/style/animation_speed").and_then(|v| v.as_f64()).map(clamp_speed)
+}
+
+#[cfg(any(test, feature = "test-isolation"))]
+thread_local! {
+    static FORCED_SPEED: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// Set what [`speed`] answers on this thread, as [`force_for_test`] does
+/// for the switch. Normal (1) unless forced.
+#[cfg(any(test, feature = "test-isolation"))]
+pub fn force_speed_for_test(value: f32) {
+    FORCED_SPEED.with(|f| f.set(value));
+}
+
+/// How fast the DE animates, as a multiplier on an animation's own rhythm:
+/// 1 is normal, 0.5 half as fast. Cheap enough for per-frame use. Without
+/// the `config` feature there is nothing to read, and it is 1.
+pub fn speed() -> f32 {
+    #[cfg(any(test, feature = "test-isolation"))]
+    {
+        FORCED_SPEED.with(|f| f.get())
+    }
+    #[cfg(not(any(test, feature = "test-isolation")))]
+    speed_on_this_machine()
+}
+
+/// [`speed`] as the shipped binary answers it: the shared config's value,
+/// re-read at most every [`RECHECK`].
+#[cfg(all(feature = "config", not(any(test, feature = "test-isolation"))))]
+fn speed_on_this_machine() -> f32 {
+    use std::sync::Mutex;
+    use web_time::Instant;
+    static CACHE: Mutex<Option<(Instant, f32)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    match *cache {
+        Some((at, value)) if now.duration_since(at) < RECHECK => value,
+        _ => {
+            let value = read_speed().unwrap_or(1.0);
+            *cache = Some((now, value));
+            value
+        }
+    }
+}
+
+#[cfg(all(not(feature = "config"), not(any(test, feature = "test-isolation"))))]
+fn speed_on_this_machine() -> f32 {
+    1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configured_speed_is_clamped_and_nonsense_is_normal() {
+        assert_eq!(clamp_speed(0.5), 0.5);
+        assert_eq!(clamp_speed(100.0), MAX_SPEED);
+        assert_eq!(clamp_speed(0.01), MIN_SPEED);
+        assert_eq!(clamp_speed(0.0), 1.0);
+        assert_eq!(clamp_speed(-2.0), 1.0);
+        assert_eq!(clamp_speed(f64::NAN), 1.0);
+    }
+
+    /// The key as the writer stores it is where the reader looks: a float
+    /// child of `style`, beside the rest of the block.
+    #[cfg(feature = "config")]
+    #[test]
+    fn the_speed_key_is_read_where_it_is_written() {
+        let mut doc: kdl::KdlDocument = "style {\n    color_scheme \"dark\"\n}\n".parse().unwrap();
+        assert!(crate::config::update_kdl_in_memory(&mut doc, SPEED_KEY, "0.75", "style"));
+        let text = doc.to_string();
+        let json = crate::config::parse_kdl_to_json(&text);
+        assert_eq!(json.pointer("/style/animation_speed").and_then(|v| v.as_f64()), Some(0.75), "{text}");
+        assert_eq!(json.pointer("/style/color_scheme").and_then(|v| v.as_str()), Some("dark"), "{text}");
+    }
+
+    #[test]
+    fn the_suite_runs_at_normal_speed_unless_a_test_forces_it() {
+        assert_eq!(speed(), 1.0);
+        force_speed_for_test(0.5);
+        assert_eq!(speed(), 0.5);
+        assert_eq!(std::thread::spawn(speed).join().unwrap(), 1.0, "the force is this thread's alone");
+        force_speed_for_test(1.0);
+    }
 
     #[test]
     fn parse_reads_the_helpers_spelling_and_nothing_else() {
