@@ -40,7 +40,9 @@
 //
 // The chord is the first string argument (a `(keybind)` or `(gesture)` type
 // annotation is accepted and ignored); a `key="..."` property works too.
-// Extra properties (e.g. `command=` for spawn) ride along on the entry.
+// Extra properties (e.g. `command=` for spawn) ride along on the entry, and
+// `label="..."` says what the binding does in words, for the key-help
+// overlay and the Keyboard page (`InputConfig::label`).
 //
 // Resolution order for an app is `<app>.<name>` → `cce-ui.<name>`; widgets
 // match the resolved chord string with `widget::match_key_shortcut`. The
@@ -176,6 +178,11 @@ pub struct InputConfig {
     /// The top-level `input { }` block: global hardware defaults, consumed
     /// by the compositor.
     global: InputSettings,
+    /// Each domain's `label=` properties, index-aligned with its entries.
+    /// Beside [`BindingEntry`] rather than in it, so code that builds
+    /// entries by struct literal (the compositor's `migrate-input`) is
+    /// untouched.
+    labels: BTreeMap<String, Vec<Option<String>>>,
 }
 
 impl InputConfig {
@@ -186,6 +193,7 @@ impl InputConfig {
         let mut domains: BTreeMap<String, Vec<BindingEntry>> = BTreeMap::new();
         let mut settings: BTreeMap<String, InputSettings> = BTreeMap::new();
         let mut global = InputSettings::default();
+        let mut labels: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
         for domain_node in doc.nodes() {
             // The top-level `input { }` block is global hardware defaults,
             // not a domain.
@@ -196,6 +204,7 @@ impl InputConfig {
             let Some(children) = domain_node.children() else { continue };
             let domain = domain_node.name().value().to_string();
             let entries = domains.entry(domain.clone()).or_default();
+            let entry_labels = labels.entry(domain.clone()).or_default();
             for node in children.nodes() {
                 // A domain's `input { }` child is its settings block.
                 if node.name().value() == "input" {
@@ -204,6 +213,7 @@ impl InputConfig {
                 }
                 let mut chord: Option<String> = None;
                 let mut command: Option<String> = None;
+                let mut label: Option<String> = None;
                 for entry in node.entries() {
                     let value = match entry.value() {
                         kdl::KdlValue::String(s) | kdl::KdlValue::RawString(s) => s.clone(),
@@ -216,6 +226,7 @@ impl InputConfig {
                             }
                         }
                         Some("command") => command = Some(value),
+                        Some("label") => label = Some(value),
                         Some(_) => {}
                     }
                 }
@@ -225,10 +236,11 @@ impl InputConfig {
                         chord,
                         command,
                     });
+                    entry_labels.push(label);
                 }
             }
         }
-        Ok(InputConfig { domains, settings, global })
+        Ok(InputConfig { domains, settings, global, labels })
     }
 
     /// Load `input.kdl`. Missing file → empty config; a parse error is
@@ -253,6 +265,12 @@ impl InputConfig {
     }
 
     /// All entries of one domain, in file order.
+    /// The `label="..."` of `domain`'s entry at `index` (its place in
+    /// [`domain`](Self::domain)), if it has one.
+    pub fn label(&self, domain: &str, index: usize) -> Option<&str> {
+        self.labels.get(domain)?.get(index)?.as_deref()
+    }
+
     pub fn domain(&self, domain: &str) -> &[BindingEntry] {
         self.domains.get(domain).map(Vec::as_slice).unwrap_or(&[])
     }
@@ -367,7 +385,165 @@ pub fn cached() -> &'static InputConfig {
 /// ```
 pub fn app_chord(name: &str, default: &str) -> String {
     let app = crate::config::get_app_name().unwrap_or_default();
-    cached().resolve_chord(&app, name, default)
+    let chord = cached().resolve_chord(&app, name, default);
+    published::record(name, &chord, toolkit_label(name));
+    chord
+}
+
+/// [`app_chord`] with what the binding does, in the words the key-help
+/// overlay shows ("New tab", "Archive message"). Prefer it for a new
+/// shortcut: a binding resolved through plain `app_chord` is listed under
+/// its name made readable, which is only as clear as the name.
+pub fn app_shortcut(name: &str, default: &str, label: &str) -> String {
+    let app = crate::config::get_app_name().unwrap_or_default();
+    let chord = cached().resolve_chord(&app, name, default);
+    published::record(name, &chord, Some(label));
+    chord
+}
+
+/// What the toolkit's own bindings do — the `cce-ui` domain's names, which
+/// the toolkit resolves itself through `app_chord` / `widget_chord` and no
+/// app labels.
+pub fn toolkit_label(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "undo" => "Undo",
+        "redo" => "Redo",
+        "focus_next_group" => "Next pane",
+        "focus_prev_group" => "Previous pane",
+        "open_search" => "Search",
+        "close_search" => "Close search",
+        _ => return None,
+    })
+}
+
+/// What this process's shortcuts resolved to, for the desktop's key-help
+/// overlay (`cce-keys`, Super+/): every [`app_chord`] and [`widget_chord`]
+/// answer is recorded here and written to
+/// `$XDG_RUNTIME_DIR/cce/keys/<pid>`, so the overlay can list the FOCUSED
+/// window's bindings — compiled-in defaults included, which input.kdl alone
+/// cannot say — by the pid the compositor reports for it. Nothing to call
+/// from an app: resolving a chord is publishing it.
+///
+/// The file is `start <starttime>` (the process's start time from
+/// `/proc/<pid>/stat`, so a recycled pid never reads a dead app's file),
+/// `app <name>`, then one `<name>\t<chord>[\t<label>]` line per binding in
+/// first-resolved order; the label is [`app_shortcut`]'s, or the toolkit's
+/// own ([`toolkit_label`]). It is rewritten (tmp + rename) only when a binding is new
+/// or changed, which is a burst at startup and then nothing: `widget_chord`
+/// runs per key event in a text box, and finds its answer already recorded.
+pub mod published {
+    use std::sync::Mutex;
+
+    /// One published binding.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Binding {
+        pub name: String,
+        pub chord: String,
+        /// What it does, when the app said ([`super::app_shortcut`]).
+        pub label: Option<String>,
+    }
+
+    /// The bindings this process has resolved, in order.
+    static RECORDED: Mutex<Vec<Binding>> = Mutex::new(Vec::new());
+
+    /// The bindings a running process published: `(app, bindings)`.
+    /// `None` when it published none, or the file outlived its process.
+    pub fn read(pid: u32) -> Option<(String, Vec<Binding>)> {
+        let text = std::fs::read_to_string(dir().join(pid.to_string())).ok()?;
+        parse(&text, start_time(pid)?)
+    }
+
+    /// [`read`]'s parse, against the start time the pid has now.
+    pub fn parse(text: &str, start: u64) -> Option<(String, Vec<Binding>)> {
+        let mut lines = text.lines();
+        let written: u64 = lines.next()?.strip_prefix("start ")?.trim().parse().ok()?;
+        if written != start {
+            return None;
+        }
+        let app = lines.next()?.strip_prefix("app ")?.trim().to_string();
+        let bindings = lines
+            .filter_map(|l| {
+                let mut fields = l.split('\t');
+                let name = fields.next()?.to_string();
+                let chord = fields.next()?.to_string();
+                let label = fields.next().filter(|s| !s.is_empty()).map(str::to_string);
+                Some(Binding { name, chord, label })
+            })
+            .collect();
+        Some((app, bindings))
+    }
+
+    /// The file's text for `bindings`.
+    pub fn format(start: u64, app: &str, bindings: &[Binding]) -> String {
+        // A tab or newline inside a field would end it; none occurs in a
+        // binding name, chord or label, but a label is free text.
+        let clean = |s: &str| s.replace(['\t', '\n'], " ");
+        let mut out = format!("start {start}\napp {app}\n");
+        for b in bindings {
+            out.push_str(&format!("{}\t{}", clean(&b.name), clean(&b.chord)));
+            if let Some(label) = &b.label {
+                out.push_str(&format!("\t{}", clean(label)));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    pub(super) fn record(name: &str, chord: &str, label: Option<&str>) {
+        let Ok(mut recorded) = RECORDED.lock() else { return };
+        let label = label.map(str::to_string);
+        match recorded.iter_mut().find(|b| b.name == name) {
+            // A later unlabeled resolution of a labeled name keeps the label.
+            Some(b) if b.chord == chord && (label.is_none() || b.label == label) => return,
+            Some(b) => {
+                b.chord = chord.to_string();
+                b.label = label.or(b.label.take());
+            }
+            None => recorded.push(Binding { name: name.to_string(), chord: chord.to_string(), label }),
+        }
+        #[cfg(not(any(test, feature = "test-isolation")))]
+        write(&recorded);
+    }
+
+    #[cfg(not(any(test, feature = "test-isolation")))]
+    fn write(bindings: &[Binding]) {
+        static PRUNED: std::sync::Once = std::sync::Once::new();
+        let pid = std::process::id();
+        let Some(start) = start_time(pid) else { return };
+        let dir = dir();
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        // Files of processes that have exited: nothing else removes them.
+        PRUNED.call_once(|| {
+            let Ok(entries) = std::fs::read_dir(&dir) else { return };
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let Some(other) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+                if !std::path::Path::new(&format!("/proc/{other}")).exists() {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        });
+        let app = crate::config::get_app_name().unwrap_or_default();
+        let path = dir.join(pid.to_string());
+        let tmp = dir.join(format!(".{pid}.tmp"));
+        if std::fs::write(&tmp, format(start, &app, bindings)).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
+    fn dir() -> std::path::PathBuf {
+        crate::config::runtime_dir().join("cce").join("keys")
+    }
+
+    /// Field 22 of `/proc/<pid>/stat`, the start time in clock ticks. The
+    /// comm field before it may hold spaces and parens, so count from the
+    /// last `)`.
+    fn start_time(pid: u32) -> Option<u64> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat.rsplit_once(')')?.1.split_whitespace().nth(19)?.parse().ok()
+    }
 }
 
 /// Whether the trackpad scrolls NATURALLY — the content following the
@@ -460,6 +636,12 @@ pub fn scroll_factors() -> ScrollFactors {
 /// `config.kdl` props), then the toolkit-wide `cce-ui` domain, then the
 /// compiled-in default.
 pub fn widget_chord(name: &str, legacy: &str, default: &str) -> String {
+    let chord = resolve_widget_chord(name, legacy, default);
+    published::record(name, &chord, toolkit_label(name));
+    chord
+}
+
+fn resolve_widget_chord(name: &str, legacy: &str, default: &str) -> String {
     let input = cached();
     if let Some(app) = crate::config::get_app_name() {
         if let Some(e) = input.get(&app, name) {
@@ -511,6 +693,36 @@ cce-files {
         assert_eq!(spawns[1].chord, "super+t");
         // key= property form.
         assert_eq!(c.get("cce-files", "open_file").unwrap().chord, "enter");
+    }
+
+    #[test]
+    fn published_bindings_round_trip_and_refuse_a_recycled_pid() {
+        let b = |name: &str, chord: &str, label: Option<&str>| published::Binding {
+            name: name.into(),
+            chord: chord.into(),
+            label: label.map(Into::into),
+        };
+        let bindings = vec![b("save", "ctrl+s", Some("Save the note")), b("open_search", "/", None)];
+        let text = published::format(4242, "cce-notes", &bindings);
+        assert_eq!(published::parse(&text, 4242), Some(("cce-notes".to_string(), bindings)));
+        // Another process now holds the pid: its start time differs.
+        assert_eq!(published::parse(&text, 4243), None);
+        assert_eq!(published::parse("", 4242), None);
+        // A file from before labels: two fields a line.
+        let old = "start 1\napp x\nsave\tctrl+s\n";
+        assert_eq!(published::parse(old, 1).unwrap().1, vec![b("save", "ctrl+s", None)]);
+    }
+
+    #[test]
+    fn labels_ride_beside_their_entries() {
+        let c = InputConfig::parse(
+            "cce-window-manager {\n spawn \"super+d\" command=\"cce-cloud --apps\" label=\"App launcher\"\n close_window \"super+q\"\n}\n",
+        )
+        .unwrap();
+        assert_eq!(c.label(WINDOW_MANAGER_DOMAIN, 0), Some("App launcher"));
+        assert_eq!(c.label(WINDOW_MANAGER_DOMAIN, 1), None);
+        assert_eq!(c.label(WINDOW_MANAGER_DOMAIN, 2), None);
+        assert_eq!(c.domain(WINDOW_MANAGER_DOMAIN)[0].command.as_deref(), Some("cce-cloud --apps"));
     }
 
     #[test]
