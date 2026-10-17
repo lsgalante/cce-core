@@ -501,11 +501,13 @@ pub mod published {
             }
             None => recorded.push(Binding { name: name.to_string(), chord: chord.to_string(), label }),
         }
-        #[cfg(not(any(test, feature = "test-isolation")))]
+        // Not in a browser either: a page has no pid, and no runtime
+        // directory for the file (std::process::id panics on wasm32).
+        #[cfg(not(any(test, feature = "test-isolation", target_arch = "wasm32")))]
         write(&recorded);
     }
 
-    #[cfg(not(any(test, feature = "test-isolation")))]
+    #[cfg(not(any(test, feature = "test-isolation", target_arch = "wasm32")))]
     fn write(bindings: &[Binding]) {
         static PRUNED: std::sync::Once = std::sync::Once::new();
         let pid = std::process::id();
